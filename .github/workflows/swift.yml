@@ -1,0 +1,25 @@
+name: Swift
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - uses: swift-actions/setup-swift@v1
+    - name: Get swift version
+      run: swift --version 
+    - name: Build
+      run: swift build -c release --arch arm64 --arch x86_64
+    - name: Archive executable
+      uses: actions/upload-artifact@v3
+      with:
+        name: DownloadImagesFromTweets
+        path: .build/apple/Products/Release/DownloadImagesFromTweets
