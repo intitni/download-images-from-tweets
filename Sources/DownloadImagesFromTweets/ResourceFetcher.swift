@@ -33,7 +33,7 @@ struct ImageResource {
 struct VideoResource {
     let name: String
     let url: URL
-    
+
     init?(urlString: String) {
         guard
             urlString.hasPrefix("https://video.twimg.com"),
@@ -46,15 +46,14 @@ struct VideoResource {
 
 typealias Resource = (images: [ImageResource], videos: [VideoResource])
 
+@MainActor
 final class ResourceFetcher: NSObject, WKNavigationDelegate {
-    private var continuation: CheckedContinuation<Resource, Error>?
-    private var webView: WKWebView
-    private let jsHandler = JSHandler()
-    @MainActor private var retryCount = -1
-    private let retryLimit: Int
-    private var didFindArticle = false
-    
-    @MainActor
+    var webView: WKWebView
+
+    let retryLimit: Int
+    var webViewDidFinishLoading = false
+    var webViewError: (any Error)?
+
     init(retryLimit: Int = 10) {
         self.retryLimit = retryLimit
         let configuration = WKWebViewConfiguration()
@@ -70,100 +69,66 @@ final class ResourceFetcher: NSObject, WKNavigationDelegate {
         self.webView = webView
         super.init()
         webView.navigationDelegate = self
-        webView.configuration.userContentController.add(jsHandler, name: "jsListener")
-        jsHandler.didFindURLs = { [weak self] urls in
-            self?.handleURLStrings(urls)
-        }
-        jsHandler.wasLoading = { [weak self] in
-            Task {
-                try await Task.sleep(nanoseconds: 1_000_000_000)
-                self?.checkResource()
-            }
-        }
     }
 
-    @MainActor
     func fetch(url: URL) async throws -> Resource {
-        retryCount = -1
-        return try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
-            _ = self.webView.load(.init(url: url))
-        }
-    }
-
-    @MainActor
-    func webView(_: WKWebView, didFinish _: WKNavigation!) {
-        webView.evaluateJavaScript(preloadScript)
-        checkResource()
-    }
-
-    /// Find image links from the web source.
-    ///
-    /// Since it's hard to determine if the webpage is fully loaded, it will retry
-    /// several times to see if images exist in this tweet. If no tweets found after retries,
-    /// it will consider that this tweet has no image.
-    @MainActor
-    func checkResource() {
-        retryCount += 1
-        guard retryCount <= retryLimit else {
-            if didFindArticle {
-                continuation?.resume(returning: (images: [], videos: []))
-            } else {
-                struct E: Error, LocalizedError {
-                    var errorDescription: String? { "Failed to load tweet." }
-                }
-                self.continuation?.resume(throwing: E())
-            }
-            return
-        }
-        webView.evaluateJavaScript(findSrcFromImgElements) { value, error in
-            if let error {
-                self.continuation?.resume(throwing: error)
+        webViewDidFinishLoading = false
+        webViewError = nil
+        var retryCount = 0
+        var isLoading = true
+        _ = webView.load(.init(url: url))
+        while !webViewDidFinishLoading {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            if let error = webViewError {
+                throw error
             }
         }
-    }
-    
-    func handleURLStrings(_ urlStrings: [String]) {
-        didFindArticle = true
-        let srcs = urlStrings
-        let images = srcs.compactMap { ImageResource(urlString: $0) }
-        let videos = srcs.compactMap { VideoResource(urlString: $0) }
-        if images.isEmpty && videos.isEmpty {
-            Task.detached {
+        while retryCount < retryLimit {
+            retryCount += 1
+            
+            guard let srcs = try await findSrcFromHTMLContent() else {
                 try await Task.sleep(nanoseconds: 500_000_000)
-                await self.checkResource()
+                continue
             }
+            isLoading = false
+
+            let images = srcs.compactMap { ImageResource(urlString: $0) }
+            let videos = srcs.compactMap { VideoResource(urlString: $0) }
+            if images.isEmpty, videos.isEmpty {
+                try await Task.sleep(nanoseconds: 300_000_000)
+            } else {
+                return (images: images, videos: videos)
+            }
+        }
+        
+        if isLoading {
+            throw FailToLoadTweetError()
         } else {
-            self.continuation?.resume(returning: (images: images, videos: videos))
+            return (images: [], videos: [])
         }
+    }
+
+    nonisolated func webView(_: WKWebView, didFinish _: WKNavigation!) {
+        Task { @MainActor in
+            self.webViewDidFinishLoading = true
+        }
+    }
+
+    nonisolated func webView(_: WKWebView, didFail _: WKNavigation!, withError error: Error) {
+        Task { @MainActor in
+            self.webViewError = error
+            self.webViewDidFinishLoading = true
+        }
+    }
+
+    func findSrcFromHTMLContent() async throws -> [String]? {
+        return try await webView.evaluateJavaScript(findSrcFromImgElements) as? [String]
     }
 }
 
-final class JSHandler: NSObject, WKScriptMessageHandler {
-    var didFindURLs: ([String]) -> Void = { _ in }
-    var wasLoading: () -> Void = {}
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard
-            let urlString = message.body as? String,
-            let data = urlString.data(using: .utf8),
-            let urls = try? JSONDecoder().decode([String].self, from: data)
-        else {
-            wasLoading()
-            return
-        }
-        didFindURLs(urls)
-    }
+struct FailToLoadTweetError: Error, LocalizedError {
+    var errorDescription: String? { "Failed to load tweet." }
 }
-
-private let preloadScript = """
-window.postM = (message) => {
-    if (window.webkit) {
-        window.webkit.messageHandlers.jsListener.postMessage(message);
-    } else {
-        console.info(message);
-    }
-}
-"""
 
 /// Find the first `<article/>` in document, if found, return all `img` `src`.
 private let findSrcFromImgElements = """
@@ -185,8 +150,8 @@ if (window.foundArticle) {
             window.urls.push(src);
         }
     }
-    window.postM(JSON.stringify(window.urls));
+    window.urls;
 } else {
-    window.postM("loading");
+    "loading"
 }
 """
