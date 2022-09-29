@@ -26,7 +26,7 @@ struct Extractor: AsyncParsableCommand {
         
         print("\(urls.count) tweet links found.")
         let (failedURLs, unhandledVideos) = await startDownload(from: urls, saveTo: outputURL)
-        print("✅ Finished. \(failedURLs.count) failed.")
+        print("🔆 Finished. \(failedURLs.count) failed.")
         
         if !failedURLs.isEmpty {
             let content = failedURLs.map { failedURL in
@@ -34,7 +34,7 @@ struct Extractor: AsyncParsableCommand {
             }.joined(separator: "\n").data(using: .utf8)
             let failedURLsPath = outputURL.appendingPathComponent("_failedURLs.txt").path
             FileManager.default.createFile(atPath: failedURLsPath, contents: content)
-            print("See \(failedURLsPath) for tweet that failed.")
+            print("See \(failedURLsPath) for tweets that failed.")
         }
         
         if !unhandledVideos.isEmpty {
@@ -64,7 +64,7 @@ struct Extractor: AsyncParsableCommand {
                 }
             }
             for (index, url) in urls.enumerated() {
-                if index > 5 { // at most 5 task at a time.
+                if index > 5 {
                     if let result = await taskGroup.next() {
                         handle(result)
                     }
@@ -115,17 +115,15 @@ func readURLsFromFile(at url: URL) throws -> [URL] {
 }
 
 func getLinks(from content: String) -> [URL] {
-    let detector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-    let matches = detector.matches(
+    let regex = try! NSRegularExpression(pattern: #"https?:\/\/twitter.com[a-z|A-Z|0-9|\/\?&_\-+$:;=@]*"#)
+    let matches = regex.matches(
         in: content,
-        options: [],
-        range: NSRange(location: 0, length: content.utf16.count)
+        range: NSRange(content.startIndex..<content.endIndex, in: content)
     )
 
     return matches.compactMap { match in
         guard let range = Range(match.range, in: content) else { return nil }
         let url = content[range]
-        guard url.hasPrefix("https://twitter.com") else { return nil }
         return URL(string: String(url))
     }
 }

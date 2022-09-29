@@ -2,6 +2,7 @@
 import XCTest
 
 let content = """
+// From Twitter Archive
 {
   "like" : {
     "tweetId" : "1572149111780179969",
@@ -16,13 +17,8 @@ let content = """
     "expandedUrl" : "https://twitter.com/i/web/status/1571801944511123460"
   }
 },
-{
-  "like" : {
-    "tweetId" : "1572164917666488320",
-    "fullText" : "秋の匂いがするね https://t.co/m92pjBvPk6",
-    "expandedUrl" : "https://twitter.com/i/web/status/1572164917666488320"
-  }
-}
+// In CSV format
+https://t.co/UlTuJpr9EA,https://twitter.com/kgtdesuteni/status/1574353093092790272,最近のヌコまとめ
 """
 
 final class DownloadImagesFromTweetsTests: XCTestCase {
@@ -30,7 +26,7 @@ final class DownloadImagesFromTweetsTests: XCTestCase {
         XCTAssertEqual(getLinks(from: content), [
             URL(string: "https://twitter.com/i/web/status/1572149111780179969")!,
             URL(string: "https://twitter.com/i/web/status/1571801944511123460")!,
-            URL(string: "https://twitter.com/i/web/status/1572164917666488320")!,
+            URL(string: "https://twitter.com/kgtdesuteni/status/1574353093092790272")
         ])
     }
 
@@ -62,6 +58,25 @@ final class RealWorldTests: XCTestCase {
         let downloader = TweetImageDownloader()
         let resources = try await downloader.getImageLinks(from: URL(string: "https://twitter.com/intitni/status/1567150754191769606")!)
         XCTAssertEqual(resources.images.count, 1)
+        XCTAssertEqual(resources.videos.count, 0)
         XCTAssertEqual(resources.images[0].urlComponents.host, "pbs.twimg.com")
+    }
+    
+    func testDownloaderGetLinksFromRandomWebSiteShouldFail() async throws {
+        let downloader = TweetImageDownloader()
+        do {
+            _ = try await downloader.getImageLinks(from: URL(string: "https://markinside.intii.com/")!)
+        } catch is FailToLoadTweetError {
+            XCTAssert(true)
+        } catch {
+            XCTFail()
+        }
+    }
+    
+    func testDownloaderGetLinksFromTweetsWithNoMedia() async throws {
+        let downloader = TweetImageDownloader()
+        let resources = try await downloader.getImageLinks(from: URL(string: "https://twitter.com/intitni/status/1477157643236130817")!)
+        XCTAssertEqual(resources.images.count, 0)
+        XCTAssertEqual(resources.videos.count, 0)
     }
 }
