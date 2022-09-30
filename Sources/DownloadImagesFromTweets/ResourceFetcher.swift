@@ -52,7 +52,7 @@ final class ResourceFetcher: NSObject, WKNavigationDelegate {
 
     let retryLimit: Int
     var webViewDidFinishLoading = false
-    var webViewError: (any Error)?
+    var navigationError: (any Error)?
 
     init(retryLimit: Int = 10) {
         self.retryLimit = retryLimit
@@ -73,15 +73,15 @@ final class ResourceFetcher: NSObject, WKNavigationDelegate {
 
     func fetch(url: URL) async throws -> Resource {
         webViewDidFinishLoading = false
-        webViewError = nil
+        navigationError = nil
         var retryCount = 0
         var isLoading = true
         _ = webView.load(.init(url: url))
         while !webViewDidFinishLoading {
             try await Task.sleep(nanoseconds: 100_000_000)
-            if let error = webViewError {
-                throw error
-            }
+        }
+        if let navigationError {
+            throw navigationError
         }
         while retryCount < retryLimit {
             retryCount += 1
@@ -116,7 +116,7 @@ final class ResourceFetcher: NSObject, WKNavigationDelegate {
 
     nonisolated func webView(_: WKWebView, didFail _: WKNavigation!, withError error: Error) {
         Task { @MainActor in
-            self.webViewError = error
+            self.navigationError = error
             self.webViewDidFinishLoading = true
         }
     }
